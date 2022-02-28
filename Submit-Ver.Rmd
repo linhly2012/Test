@@ -1,0 +1,269 @@
+---
+title: "HW2"
+date: '2022-02-26'
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(leaflet)
+#install.packages("jsonlite")
+#install.packages("rjson")
+library(jsonlite)
+library(rjson)
+
+state_coord <- map_data("state")
+```
+
+```{r, include=FALSE }
+#### Part I. Initial Data Manipulation and Cleaning Process
+
+##sensor data = running app df and activity data 
+running_app_u00 <-read.csv("dataset/dataset/app_usage/running_app_u00.csv")
+ 
+## importing the calendar data to see the possibility of pinpointing when the students 
+# is supposed to be in class or not 
+calendar_u00 <- read.csv("dataset/dataset/calendar/calendar_u00.csv")
+
+## problem: the data set read in the "," after each value in the travelstate as an extra column 
+# 1. thus, the need to include row.names = NULL to make sure it does not mistakes the first 
+# column as row name
+gps_u00 <- read.csv("dataset/dataset/sensing/gps/gps_u00.csv", sep=",", 
+                    row.names = NULL, 
+                    na.strings = "NA", 
+                    stringsAsFactors=FALSE) 
+
+# now onto the second problem, which is the system treat column name for "time" as 
+# "row.names". So, the next logical step is to replace it back with the actual name 
+# 1. drop the "row.names" value and to also ensure the "travelstate" column name is preserved
+new_col_name <- colnames(gps_u00[-1])
+
+#2. drop the empty column that was labelled as "travelstate"
+gps_u00 <- gps_u00 %>% select(-travelstate) 
+
+#3. put the column names back to where it needed to be
+colnames(gps_u00)[colnames(gps_u00) %in% colnames(gps_u00)] <- new_col_name
+```
+
+#### Part I. Data Manipulation to Understand The Likelihood of Re-identification
+
+```{r}
+## match all the three data (running_app, calendar, location) to see if we can detect 
+# at which point in time of the date, what is the user doing? are they inactive (not moving and stay at the one location) 
+# or active? if this could be easily piece together and identify, then it is concerning because for someone that is 
+# planning to stalk on another person, this information could be an insight into someone daily routines and 
+# where they could look out for the specific person 
+
+## before merge the data with the running_app and activity, there is a need to replace the time column to time 
+# stamp; its easier to join them together
+colnames(gps_u00)[colnames(gps_u00 ) == "time"] <- "timestamp"
+# convert it to integer to avoid potential error 
+gps_u00$timestamp <- as.integer(gps_u00$timestamp)
+
+## 3. joint the other two with the gps data 
+## other comment: while NA is still an important value because we don't know if what NA is stands for in this context
+##               I chose to drop NA for mapping purpose (if I decided to do so later)
+run_app_activity <- gps_u00 %>% dplyr::left_join(running_app_u00, by="timestamp") %>% na.omit()
+
+head(x = run_app_activity %>% unique(), n=5)
+```
+
+#### Part II. Data Visualization
+
+1. All the locations the participant visited throughout the time they were involved with the study
+
+```{r, warning=FALSE}
+world_coordinates <- map_data("world")
+
+ggplot() +
+  geom_map(
+    data = world_coordinates, map = world_coordinates,
+    aes(x=long, y=lat, map_id = region)) + 
+  geom_point(data=run_app_activity, 
+             aes(x=longitude, y=latitude, color=travelstate),
+             size =0.8) + 
+  xlim(-80, 3) + 
+  ylim(38.4,52)
+```
+
+2. Participant's locations based on the calendar data  
+
+```{r}
+# match the activity data set and calendar (though I am not exactly sure what this calendar
+# suppose to stand for)
+t <- merge(calendar_u00, run_app_activity, by="timestamp") 
+t$timestamp <- as.POSIXct(t$timestamp, origin="1970-01-01 %H %M %S")
+
+leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addMarkers(lng=t$longitude, lat=t$latitude, popup=t$timestamp)
+```
+
+3. Participant's data in the US only 
+
+```{r, warning=FALSE}
+# state_coord <- map_data("state")
+
+in_US_only <-run_app_activity %>% filter(longitude < -60)
+
+ggplot() +
+  geom_map(
+    data = state_coord, map = state_coord,
+    aes(x=long, y=lat, map_id = region)) + 
+  geom_point(data=in_US_only, 
+             aes(x=longitude, y=latitude, color=travelstate),
+             size =0.8) + 
+  xlim(-77.5, -70.5) + 
+  ylim(38,45)
+```
+
+a. Location 1 in the US
+
+```{r}
+##DC region 
+US_l1 <-run_app_activity %>% filter(longitude < -75)
+
+US_l1$timestamp <- as.POSIXct(US_l1$timestamp, origin="1970-01-01 %H %M %S")
+
+
+leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addMarkers(lng=US_l1$longitude, lat=US_l1$latitude, popup=US_l1$timestamp)
+```
+a1. Whether the participant was in a moving or stationary stage while they were nearby DC area
+
+```{r, warning=FALSE}
+ggplot() +
+  geom_map(
+    data = state_coord, map = state_coord,
+    aes(x=long, y=lat, map_id = region)) + 
+  geom_point(data=US_l1, 
+             aes(x=longitude, y=latitude, color=travelstate),
+             size =0.8) + 
+  xlim(-79, -76.75) + 
+  ylim(38.5, 39.5)
+```
+
+4. Participant's location in Europe with date and time
+
+```{r}
+outside_US <-run_app_activity %>% filter(longitude > -60)
+outside_US$timestamp <- as.POSIXct(outside_US$timestamp, origin="1970-01-01 %H %M %S")
+
+leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addMarkers(lng=outside_US$longitude, lat=outside_US$latitude, popup=outside_US$timestamp)
+```
+
+5. Participant's location that is linked to their mood 
+
+```{r}
+# read the participant 00 mood data 
+js_data <- fromJSON(file = "./dataset/dataset/EMA/response/Mood/Mood_u00.json")
+
+# convert to data frame
+js_data_df <- as.data.frame(js_data) 
+
+# break the location information to get the lat and long to plot on the map
+# drop location.1 because it produced NA and for graphing purposes
+before_comma <- as.double(sapply(strsplit(js_data_df$location, ","), "[", 1)) #lat
+#before_comma1 <- as.double(sapply(strsplit(js_data_df$location.1, ","), "[", 1)) #lat
+before_comma2 <- as.double(sapply(strsplit(js_data_df$location.2, ","), "[", 1))
+before_comma3 <- as.double(sapply(strsplit(js_data_df$location.3, ","), "[", 1))
+before_comma4 <- as.double(sapply(strsplit(js_data_df$location.4, ","), "[", 1))
+before_comma5 <- as.double(sapply(strsplit(js_data_df$location.5, ","), "[", 1))
+before_comma6 <- as.double(sapply(strsplit(js_data_df$location.6, ","), "[", 1))
+before_comma7 <- as.double(sapply(strsplit(js_data_df$location.7, ","), "[", 1))
+
+lat_val <- c(before_comma, before_comma2, before_comma3, before_comma4, 
+             before_comma5, before_comma6, before_comma7)
+
+after_comma <- as.double(sapply(strsplit(js_data_df$location, ","), "[", 2)) #long
+after_comma2 <- as.double(sapply(strsplit(js_data_df$location.2, ","), "[", 2)) #long
+after_comma3 <- as.double(sapply(strsplit(js_data_df$location.3, ","), "[", 2)) #long
+after_comma4 <- as.double(sapply(strsplit(js_data_df$location.4, ","), "[", 2)) #long
+after_comma5 <- as.double(sapply(strsplit(js_data_df$location.5, ","), "[", 2)) #long
+after_comma6 <- as.double(sapply(strsplit(js_data_df$location.6, ","), "[", 2)) #long
+after_comma7 <- as.double(sapply(strsplit(js_data_df$location.7, ","), "[", 2)) #long
+
+long_val <- c(after_comma, after_comma2, after_comma3, after_comma4, 
+             after_comma5, after_comma6, after_comma7)
+
+#since dropped the location.1 information, resp_time.1 is dropped to ensure consistency
+time_s <- c(js_data_df$resp_time, js_data_df$resp_time.2, 
+            js_data_df$resp_time.3, js_data_df$resp_time.4, js_data_df$resp_time.5, 
+            js_data_df$resp_time.6, js_data_df$resp_time.7)
+
+#mood happy 
+happy <- c(js_data_df$happy, js_data_df$happy.2, 
+            js_data_df$happy.3, js_data_df$happy.4, js_data_df$happy.5, 
+            js_data_df$happy.6, js_data_df$happy.7)
+
+lists <- list(lat = lat_val,
+              long = long_val, 
+              time = time_s, 
+              happy = as.integer(happy))
+
+mood_gps_df <- as.data.frame(do.call(cbind, lists))
+
+#convert UNIX time measure into standard time 
+mood_gps_df$time <- as.POSIXct(mood_gps_df$time, origin="1970-01-01 %H %M %S")
+
+#plot 
+leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addMarkers(lng=mood_gps_df$long, lat=mood_gps_df$lat, popup=paste(mood_gps_df$time, " and rate of happy: ",mood_gps_df$happy))
+```
+
+#### Part III. Anonymization approach 
+
+```{r}
+# read the participant 00 sleep data 
+js_sleep_data <- fromJSON(file = "./dataset/dataset/EMA/response/Sleep/Sleep_u00.json")
+
+lat_graph <- c()
+long_graph <- c()
+rate <- c()
+time_sleep <- c() 
+
+count <- 0 
+long <- 0 
+lat <- 0
+
+for(i in 1:length(js_sleep_data)) {
+  entry <- js_sleep_data[[i]]
+  if(!is.null(entry[['location']]) && entry[['location']] != 'Unknown') {
+    location <- entry[['location']]
+
+    ifelse(as.double(sapply(strsplit(location, ","), "[", 2)) < 0,
+           long <- as.double(sapply(strsplit(location, ","), "[", 2)) - 5,
+           long <- as.double(sapply(strsplit(location, ","), "[", 2)) + 5)
+
+    ifelse(as.double(sapply(strsplit(location, ","), "[", 1)) < 0, 
+           lat <- as.double(sapply(strsplit(location, ","), "[", 1)) - 5, 
+           lat <- as.double(sapply(strsplit(location, ","), "[", 1)) + 5)
+    
+    count <- count + 1 
+    lat_graph[count] <- lat
+    long_graph[count] <- long
+    rate[count] <- entry[['rate']]
+    time_sleep[count] <- entry[['resp_time']]
+
+  }
+}
+
+#group everything in a list format to rebuilt as a dataframe to plot 
+#the graph later 
+list_anonymize <- list(lat = lat_graph, long = long_graph, rate=rate, 
+                       time=as.POSIXct(time_sleep, origin="1970-01-01 %H %M %S")) 
+
+anoymized_gps <- as.data.frame(do.call(cbind, list_anonymize))
+
+#plot 
+leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addMarkers(lng=list_anonymize$long, lat=list_anonymize$lat, popup=paste(list_anonymize$time, "and sleep quality: ",list_anonymize$rate))
+```
+
